@@ -21,6 +21,25 @@ REQUIRED_PACKAGES = {
 }
 
 
+def _install(missing: list) -> str:
+    """Try pip, then uv. Return "" on success, otherwise the error text."""
+    commands = [
+        [sys.executable, "-m", "pip", "install", "--quiet", *missing],
+        ["uv", "pip", "install", "--quiet", "--python", sys.executable, *missing],
+    ]
+    last_error = ""
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except Exception as e:  # command not found, timeout, etc.
+            last_error += f"$ {' '.join(cmd[:4])}\n{e}\n"
+            continue
+        if result.returncode == 0:
+            return ""
+        last_error += f"$ {' '.join(cmd[:4])}\n{(result.stderr or result.stdout).strip()[-600:]}\n"
+    return last_error or "unknown error"
+
+
 def ensure_packages() -> None:
     missing = []
     for module, pip_name in REQUIRED_PACKAGES.items():
@@ -31,18 +50,16 @@ def ensure_packages() -> None:
     if not missing:
         return
     with st.spinner(f"Installing missing packages: {', '.join(missing)} (first run only)..."):
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "--quiet", *missing],
-                timeout=300,
-            )
-        except Exception:
-            st.error(
-                f"Could not install: {', '.join(missing)}. Put a file named requirements.txt in the ROOT "
-                "of your GitHub repo with the lines: streamlit, google-genai, pypdf, python-docx. "
-                "Then reboot the app from Manage app."
-            )
-            st.stop()
+        error_text = _install(missing)
+    if error_text:
+        st.error(
+            f"Could not install: {', '.join(missing)}. Streamlit did not read your requirements.txt. "
+            "Put a file named requirements.txt in the ROOT of your GitHub repo "
+            "(the same folder level as the repo's first page) with the lines: "
+            "streamlit, google-genai, pypdf, python-docx. Then reboot the app from Manage app."
+        )
+        st.code(error_text)
+        st.stop()
     importlib.invalidate_caches()
 
 
