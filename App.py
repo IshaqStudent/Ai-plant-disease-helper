@@ -8,9 +8,21 @@ import os
 import re
 
 import streamlit as st
-from google import genai
-from google.genai import types
 from PIL import Image, ImageOps
+
+# Gemini SDK: prefer the new "google-genai" package, fall back to the old one.
+try:
+    from google import genai
+    from google.genai import types
+
+    SDK = "new"
+except ImportError:
+    try:
+        import google.generativeai as legacy_genai
+
+        SDK = "legacy"
+    except ImportError:
+        SDK = None
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_IMAGE_SIDE = 1280  # shrink big phone photos so requests are fast and cheap
@@ -105,21 +117,31 @@ def parse_model_json(text):
 
 def analyze_leaf(image, api_key, model_name, language="English"):
     """Send the image to Gemini and return the parsed result dict."""
-    client = genai.Client(api_key=api_key)
     prompt = PROMPT
     if language != "English":
         prompt += (
             f"\nWrite all text values in {language}, but keep the JSON keys and the "
             'confidence values ("Low", "Medium", "High") in English.'
         )
-    response = client.models.generate_content(
-        model=model_name,
-        contents=[image, prompt],
-        config=types.GenerateContentConfig(
-            temperature=0.2,
-            response_mime_type="application/json",
-        ),
-    )
+    if SDK == "new":
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[image, prompt],
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json",
+            ),
+        )
+    elif SDK == "legacy":
+        legacy_genai.configure(api_key=api_key)
+        model = legacy_genai.GenerativeModel(model_name)
+        response = model.generate_content(
+            [prompt, image],
+            generation_config={"temperature": 0.2, "response_mime_type": "application/json"},
+        )
+    else:
+        raise RuntimeError("No Gemini package installed.")
     return parse_model_json(response.text)
 
 
@@ -165,6 +187,14 @@ def main():
     st.set_page_config(page_title="Plant Disease Helper", page_icon="🌿")
     st.title("🌿 Plant Disease Helper")
     st.write("Upload a photo of a plant leaf. Get the likely disease and simple advice.")
+
+    if SDK is None:
+        st.error(
+            "The Gemini package is not installed. Make sure requirements.txt is in the "
+            "ROOT of your GitHub repo and contains the line: google-genai. "
+            "Then reboot the app from Manage app."
+        )
+        st.stop()
 
     api_key = get_api_key()
     if not api_key:
